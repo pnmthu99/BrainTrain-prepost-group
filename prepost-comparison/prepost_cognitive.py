@@ -42,6 +42,12 @@ Output
 - Prints a formatted summary table to console
 - Saves summary_results.csv
 - Saves a before-after paired plot per test (paired_plot_<test>.png)
+- Saves estimation plots per test (estimation_plot_<test>.png)
+- Saves combined estimation figure (combined_estimation_all_tests.png)
+
+Estimation plots (Gardner-Altman / Cumming style) added 2026-07:
+  make_estimation_plot()            -- single-test version
+  make_combined_estimation_figure() -- 5-panel manuscript figure
 
 Usage
 -----
@@ -214,8 +220,8 @@ def _draw_paired_panel(ax, result, panel_label=None, title_fontsize=11):
 
     for i in range(n):
         ax.plot([0, 1], [pre[i], post[i]], color="gray", alpha=0.4, linewidth=0.8)
-    ax.scatter(np.zeros(n), pre, color="#4C72B0", zorder=3, s=22, label="Pre")
-    ax.scatter(np.ones(n), post, color="#DD8452", zorder=3, s=22, label="Post")
+    ax.scatter(np.zeros(n), pre, color="#4C72B0", zorder=3, s=28, label="Pre")
+    ax.scatter(np.ones(n), post, color="#DD8452", zorder=3, s=28, label="Post")
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["Pre", "Post"])
     ax.set_xlim(-0.3, 1.3)
@@ -285,6 +291,391 @@ def make_combined_figure(results, out_path):
     plt.close(fig)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Estimation plots — two publication-quality styles
+#
+#   Gardner-Altman (1986 / Ho 2019):
+#     Raw data (left axis) + effect-size axis (right, SAME y-scale, connected).
+#     The right axis is shifted vertically so that 0 aligns with the Post mean.
+#     Half-violin of bootstrap distribution opens to the RIGHT.
+#
+#   Cumming (2012 / Ho 2019):
+#     Raw data (top sub-panel) + effect-size axis (bottom sub-panel, centred at 0).
+#     The two sub-panels share the same x positions so data dots are vertically
+#     aligned with the effect dot below.
+#
+# Key design rules (following dabest / Nature Methods conventions):
+#   • Slopegraph lines connect every paired observation.
+#   • Mean ± SD shown as "gapped" vertical bars (gap = white space around mean).
+#   • Effect-size panel: half-violin (bootstrap KDE) + thick CI whisker + mean dot.
+#   • Zero reference: dashed horizontal line at diff = 0.
+#   • ALL annotation text (stars, CI, effect size) goes into a clean text-box
+#     BELOW the violin (Cumming) or to the far right (Gardner-Altman), never
+#     overlapping the data cloud.
+# ──────────────────────────────────────────────────────────────────────────────
+
+from scipy.stats import gaussian_kde  # imported here so helpers below can use it
+
+
+def _bootstrap_dist(diff, n_boot=N_BOOT):
+    """Return the bootstrap sampling distribution of the mean of diff."""
+    n = len(diff)
+    boot = np.empty(n_boot)
+    for i in range(n_boot):
+        boot[i] = RNG.choice(diff, size=n, replace=True).mean()
+    return boot
+
+
+def _gapped_meansem(ax, xpos, vals, color, dot_size=55):
+    """
+    Draw a dabest-style 'gapped line': mean ± 1 SEM with a white gap around
+    the mean dot, so the mean is clearly visible.
+    """
+    m   = vals.mean()
+    sem = vals.std(ddof=1) / np.sqrt(len(vals))
+    gap = sem * 0.30
+    ax.plot([xpos, xpos], [m - sem, m - gap], color=color, lw=2.5,
+            solid_capstyle="butt", zorder=5)
+    ax.plot([xpos, xpos], [m + gap, m + sem], color=color, lw=2.5,
+            solid_capstyle="butt", zorder=5)
+    ax.scatter([xpos], [m], color=color, s=dot_size, zorder=6)
+
+
+def _draw_raw_slopegraph(ax, pre, post, scatter_alpha=0.85, line_alpha=0.18):
+    """
+    Draw jittered dots + slopegraph lines on ax.
+    Pre at x=0, Post at x=1.
+    Returns handles for legend.
+    """
+    n = len(pre)
+    jk = 0.07
+    jx_pre  = RNG.uniform(-jk, jk, n)
+    jx_post = RNG.uniform(-jk, jk, n)
+
+    for i in range(n):
+        ax.plot([jx_pre[i], 1 + jx_post[i]], [pre[i], post[i]],
+                color="#888888", alpha=line_alpha, lw=0.6, zorder=1)
+
+    h1 = ax.scatter(jx_pre,     pre,  color="#4C72B0", s=28, alpha=scatter_alpha,
+                    zorder=3, label="Pre")
+    h2 = ax.scatter(1 + jx_post, post, color="#DD8452", s=28, alpha=scatter_alpha,
+                    zorder=3, label="Post")
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(["Pre", "Post"], fontsize=9)
+    ax.set_xlim(-0.50, 1.50)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    return h1, h2
+
+
+def _draw_effect_violin(ax, boot_means, mean_d, ci_lo, ci_hi,
+                        x_anchor=0.0, violin_dir=+1,
+                        violin_scale=0.30, color="#4C5D73"):
+    """
+    Draw half-violin (bootstrap KDE) + CI whisker + mean dot.
+
+    x_anchor   : x-position of the CI/dot (e.g. 0 for Gardner-Altman, 0 for Cumming)
+    violin_dir : +1 = violin opens to the RIGHT, -1 = opens to the LEFT
+    """
+    bmin, bmax = boot_means.min(), boot_means.max()
+    spread = max(bmax - bmin, 1e-6)
+    kde_y = np.linspace(bmin - 0.25 * spread, bmax + 0.25 * spread, 400)
+    try:
+        kde_v = gaussian_kde(boot_means, bw_method="scott")(kde_y)
+        kde_v = kde_v / kde_v.max() * violin_scale
+        ax.fill_betweenx(kde_y,
+                         x_anchor,
+                         x_anchor + violin_dir * kde_v,
+                         color=color, alpha=0.20, linewidth=0)
+        ax.plot(x_anchor + violin_dir * kde_v, kde_y,
+                color=color, alpha=0.85, linewidth=1.0)
+    except Exception:
+        pass
+
+    # CI whisker (thick line)
+    ax.plot([x_anchor, x_anchor], [ci_lo, ci_hi],
+            color=color, lw=2.2, solid_capstyle="round", zorder=4)
+    # mean diff dot
+    ax.scatter([x_anchor], [mean_d], color=color, s=65, zorder=5)
+    # zero reference
+    ax.axhline(0, color="black", lw=0.9, ls="--", alpha=0.85, zorder=2)
+
+
+def _annotation_box(ax, result, fontsize=7, loc="lower right"):
+    """
+    Place a compact annotation text-box with stars, mean diff, CI, effect size.
+    loc: 'lower right' | 'upper right' | 'lower left' | 'upper left'
+    """
+    stars  = sig_stars(result["p_adj_FDR"])
+    md     = result["Mean_Diff"]
+    ci_lo  = result["Boot_95CI_Low"]
+    ci_hi  = result["Boot_95CI_High"]
+    es     = result["Effect_Size"]
+    eslbl  = result["Effect_Size_Type"]
+
+    txt = (f"{stars}\n"
+           f"Δ = {md:+.2f}\n"
+           f"95 % CI [{ci_lo:.2f}, {ci_hi:.2f}]\n"
+           f"{eslbl} = {es:.3f}")
+
+    loc_map = {
+        "lower right": (0.97, 0.03, "right",  "bottom"),
+        "upper right": (0.97, 0.97, "right",  "top"),
+        "lower left":  (0.03, 0.03, "left",   "bottom"),
+        "upper left":  (0.03, 0.97, "left",   "top"),
+    }
+    x, y, ha, va = loc_map.get(loc, loc_map["lower right"])
+    ax.text(x, y, txt, transform=ax.transAxes,
+            fontsize=fontsize, ha=ha, va=va, linespacing=1.6,
+            bbox=dict(boxstyle="round,pad=0.18", facecolor="white",
+                      edgecolor="none", alpha=0.90, linewidth=0.8))
+
+
+# ── Gardner-Altman ──────────────────────────────────────────────────────────
+
+def _ga_panel(ax_raw, ax_eff, result, boot_means,
+              panel_label=None, title_fontsize=10):
+    """
+    One Gardner-Altman panel.
+
+    ax_raw : left axes — raw slopegraph
+    ax_eff : right axes — effect-size axis
+               * shares the SAME y-scale as ax_raw
+               * y is translated so that 0 aligns with Post mean
+    """
+    pre    = result["_pre_raw"]
+    post   = result["_post_raw"]
+    mean_d = result["Mean_Diff"]
+    ci_lo  = result["Boot_95CI_Low"]
+    ci_hi  = result["Boot_95CI_High"]
+    n      = result["N"]
+
+    # --- raw panel ---
+    h1, h2 = _draw_raw_slopegraph(ax_raw, pre, post)
+    stars = sig_stars(result["p_adj_FDR"])
+    
+    if stars != "ns":
+        ymin, ymax = ax_raw.get_ylim()
+        yrange = ymax - ymin
+        bar_y = ymax - 0.02 * yrange
+        tick_h = 0.02 * yrange
+
+        ax_raw.plot(
+            [0, 0, 1, 1],
+            [bar_y - tick_h, bar_y, bar_y, bar_y - tick_h],
+            color="black",
+            lw=1.2,
+            clip_on=False,
+        )
+
+        ax_raw.text(
+            0.5,
+            bar_y + 0.012 * yrange,
+            stars,
+            ha="center",
+            va="bottom",
+            fontsize=11,
+            fontweight="bold",
+        )
+
+        ax_raw.set_ylim(ymin, ymax + 0.08 * yrange)   
+
+    ax_raw.set_ylabel("Score", fontsize=9)
+
+    test   = result["Test"]
+    method = result["Test_Used"]
+    p_adj  = result["p_adj_FDR"]
+    ax_raw.set_title(
+        f"{test}  (n = {n})\n{method},  $p_{{FDR}}$ = {p_adj:.4f}",
+        fontsize=title_fontsize, pad=5,
+    )
+    if panel_label:
+        ax_raw.text(-0.20, 1.12, panel_label, transform=ax_raw.transAxes,
+                    fontsize=14, fontweight="bold", va="top", ha="left")
+
+    # --- effect axis ---
+    # The Gardner-Altman convention: the right axis y=0 corresponds to Post mean.
+    post_mean = post.mean()
+    raw_ylim  = ax_raw.get_ylim()
+
+    # Transform: effect_y = raw_y - post_mean  →  raw_y = effect_y + post_mean
+    eff_lo = raw_ylim[0] - post_mean
+    eff_hi = raw_ylim[1] - post_mean
+    ax_eff.set_ylim(eff_lo, eff_hi)
+
+    _draw_effect_violin(ax_eff, boot_means, mean_d, ci_lo, ci_hi,
+                        x_anchor=0.0, violin_dir=+1)
+
+    # tick labels on the right
+    ax_eff.yaxis.set_label_position("right")
+    ax_eff.yaxis.tick_right()
+    ax_eff.tick_params(axis="y", labelsize=8)
+    ax_eff.set_xticks([])
+    ax_eff.set_xlim(-0.55, 0.85)
+    ax_eff.spines[["top", "left", "bottom"]].set_visible(False)
+    ax_eff.set_ylabel("Mean difference", fontsize=8, labelpad=6)
+
+    # Annotation box — bottom of effect axis (avoids violin which opens right)
+    _annotation_box(ax_eff, result, fontsize=7, loc="lower right")
+
+    return h1, h2
+
+
+def make_ga_plot(result, out_path):
+    """
+    Single-test Gardner-Altman estimation plot.
+    Raw data on the LEFT (wider); effect-size axis on the RIGHT.
+    The two axes share the same y-scale; the right axis is shifted so 0 = Post mean.
+    """
+    boot_means = _bootstrap_dist(result["_diff_raw"])
+
+    fig = plt.figure(figsize=(6.0, 4.8))
+    ax_raw = fig.add_axes([0.12, 0.13, 0.52, 0.74])
+    ax_eff = fig.add_axes([0.68, 0.13, 0.26, 0.74])
+
+    h1, h2 = _ga_panel(ax_raw, ax_eff, result, boot_means, title_fontsize=11)
+
+    fig.legend([h1, h2], ["Pre", "Post"],
+               loc="lower center", ncol=2, fontsize=8,
+               frameon=False, bbox_to_anchor=(0.38, -0.01))
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_combined_ga_figure(results, out_path):
+    """
+    Combined Gardner–Altman figure.
+
+                A (MMSE)
+
+        B (TMT-A)      C (TMT-B)
+
+        D (DSF)        E (DSB)
+    """
+
+    import matplotlib.gridspec as gridspec
+
+    boot_dists = [_bootstrap_dist(r["_diff_raw"]) for r in results]
+    panel_labels = [chr(ord("A") + i) for i in range(len(results))]
+
+    fig = plt.figure(figsize=(12, 14))
+
+    outer = gridspec.GridSpec(
+        3, 2,
+        figure=fig,
+        height_ratios=[1.15, 1, 1],
+        hspace=0.45,
+        wspace=0.28,
+        left=0.06,
+        right=0.97,
+        top=0.96,
+        bottom=0.07,
+    )
+
+    panel_positions = [
+        outer[0, :],     # MMSE
+        outer[1, 0],     # TMT-A
+        outer[1, 1],     # TMT-B
+        outer[2, 0],     # DSF
+        outer[2, 1],     # DSB
+    ]
+
+    for result, label, boot, cell in zip(
+            results,
+            panel_labels,
+            boot_dists,
+            panel_positions):
+
+        inner = gridspec.GridSpecFromSubplotSpec(
+            1,
+            2,
+            subplot_spec=cell,
+            width_ratios=[3.4, 0.9],
+            wspace=0.02,
+        )
+
+        ax_raw = fig.add_subplot(inner[0])
+        ax_eff = fig.add_subplot(inner[1])
+        
+        if label == "A":
+            pos_raw = ax_raw.get_position()
+            pos_eff = ax_eff.get_position()
+
+            # Current total width of panel
+            total_left = pos_raw.x0
+            total_right = pos_eff.x1
+            total_width = total_right - total_left
+
+            shrink = 0.82        # keep 82% of current width
+            shift_left = 0.02    # shift slightly left
+
+            new_width = total_width * shrink
+            new_left = total_left + shift_left
+
+            raw_frac = 3.4 / (3.4 + 0.9)
+            eff_frac = 0.9 / (3.4 + 0.9)
+
+            raw_w = new_width * raw_frac
+            eff_w = new_width * eff_frac
+
+            ax_raw.set_position([
+                new_left,
+                pos_raw.y0,
+                raw_w,
+                pos_raw.height,
+            ])
+
+            ax_eff.set_position([
+                new_left + raw_w,
+                pos_eff.y0,
+                eff_w,
+                pos_eff.height,
+            ])
+
+        _ga_panel(
+            ax_raw,
+            ax_eff,
+            result,
+            boot,
+            panel_label=label,
+            title_fontsize=10,
+        )
+
+    handles = [
+        plt.scatter([], [], color="#4C72B0", s=30, label="Pre"),
+        plt.scatter([], [], color="#DD8452", s=30, label="Post"),
+    ]
+
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=2,
+        fontsize=9,
+        frameon=False,
+        bbox_to_anchor=(0.5, 0.01),
+    )
+
+    fig.savefig(
+        out_path,
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
+
+
+# Keep old names as aliases so main() can call both
+def make_estimation_plot(result, out_path):
+    """Alias → Gardner-Altman (kept for backward compatibility)."""
+    make_ga_plot(result, out_path)
+
+
+def make_combined_estimation_figure(results, out_path):
+    """Alias → Gardner-Altman combined figure (kept for backward compatibility)."""
+    make_combined_ga_figure(results, out_path)
+
+
 def main(csv_path):
     df = pd.read_csv(csv_path)
     results = []
@@ -326,6 +717,17 @@ def main(csv_path):
     combined_fname = "combined_panel_all_tests.png"
     make_combined_figure(results, combined_fname)
     print(f"Saved: {combined_fname}")
+
+    # ── Gardner-Altman estimation plots ───────────────────────────────────────
+    print("\n── Gardner-Altman estimation plots ──")
+    for r in results:
+        safe = r["Test"].replace(" ", "_").replace("-", "")
+        fname = f"ga_plot_{safe}.png"
+        make_ga_plot(r, fname)
+        print(f"Saved: {fname}")
+
+    make_combined_ga_figure(results, "combined_ga_all_tests.png")
+    print("Saved: combined_ga_all_tests.png")
 
 
 if __name__ == "__main__":
