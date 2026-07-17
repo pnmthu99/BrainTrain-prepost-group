@@ -79,16 +79,25 @@ ALPHA = 0.05
 RNG = np.random.default_rng(42)
 
 
-def bootstrap_ci_mean(x, n_boot=N_BOOT, alpha=ALPHA):
-    """Percentile bootstrap CI for the mean of x."""
-    x = np.asarray(x)
-    boot_means = np.empty(n_boot)
-    n = len(x)
+def _bootstrap_dist_from_diff(diff, n_boot=N_BOOT):
+    """
+    Returns the full bootstrap resampling distribution of the mean of diff.
+    Computed ONCE per test (inside analyze_one_test) and reused for both the
+    reported CI and the Gardner-Altman violin, so the two always agree
+    exactly instead of being drawn from two separately-seeded resamples.
+    """
+    diff = np.asarray(diff)
+    n = len(diff)
+    boot = np.empty(n_boot)
     for i in range(n_boot):
-        sample = RNG.choice(x, size=n, replace=True)
-        boot_means[i] = sample.mean()
-    lo = np.percentile(boot_means, 100 * (alpha / 2))
-    hi = np.percentile(boot_means, 100 * (1 - alpha / 2))
+        boot[i] = RNG.choice(diff, size=n, replace=True).mean()
+    return boot
+
+
+def percentile_ci(boot_dist, alpha=ALPHA):
+    """Percentile 95% CI computed FROM an already-generated bootstrap distribution."""
+    lo = np.percentile(boot_dist, 100 * (alpha / 2))
+    hi = np.percentile(boot_dist, 100 * (1 - alpha / 2))
     return lo, hi
 
 
@@ -146,7 +155,8 @@ def analyze_one_test(df, test_name, pre_col, post_col, lower_is_better):
         effect_label = "Rank-biserial r"
         stat_value = w_stat
 
-    ci_lo, ci_hi = bootstrap_ci_mean(diff)
+    boot_dist = _bootstrap_dist_from_diff(diff)  # single resample, reused for CI + violin
+    ci_lo, ci_hi = percentile_ci(boot_dist)
 
     # human-readable improvement direction
     if lower_is_better:
@@ -175,6 +185,7 @@ def analyze_one_test(df, test_name, pre_col, post_col, lower_is_better):
         "_diff_raw": diff,  # kept for plotting, stripped before CSV export
         "_pre_raw": pre,
         "_post_raw": post,
+        "_boot_dist_raw": boot_dist,  # reused by GA plots so violin matches reported CI exactly
     }
 
 
@@ -296,7 +307,8 @@ def make_combined_figure(results, out_path):
 #
 #   Gardner-Altman (1986 / Ho 2019):
 #     Raw data (left axis) + effect-size axis (right, SAME y-scale, connected).
-#     The right axis is shifted vertically so that 0 aligns with the Post mean.
+#     The right axis is shifted vertically so that 0 aligns with the Pre mean
+#     (the baseline / reference group, per standard Gardner-Altman convention).
 #     Half-violin of bootstrap distribution opens to the RIGHT.
 #
 #   Cumming (2012 / Ho 2019):
@@ -315,15 +327,6 @@ def make_combined_figure(results, out_path):
 # ──────────────────────────────────────────────────────────────────────────────
 
 from scipy.stats import gaussian_kde  # imported here so helpers below can use it
-
-
-def _bootstrap_dist(diff, n_boot=N_BOOT):
-    """Return the bootstrap sampling distribution of the mean of diff."""
-    n = len(diff)
-    boot = np.empty(n_boot)
-    for i in range(n_boot):
-        boot[i] = RNG.choice(diff, size=n, replace=True).mean()
-    return boot
 
 
 def _gapped_meansem(ax, xpos, vals, color, dot_size=55):
@@ -404,18 +407,19 @@ def _draw_effect_violin(ax, boot_means, mean_d, ci_lo, ci_hi,
 
 def _annotation_box(ax, result, fontsize=7, loc="lower right"):
     """
-    Place a compact annotation text-box with stars, mean diff, CI, effect size.
+    Place a compact annotation text-box with mean diff, CI, effect size.
+    Significance stars are NOT repeated here -- they're already shown as a
+    bracket above the raw (left) panel, so this box only adds the numeric
+    detail that bracket doesn't carry.
     loc: 'lower right' | 'upper right' | 'lower left' | 'upper left'
     """
-    stars  = sig_stars(result["p_adj_FDR"])
     md     = result["Mean_Diff"]
     ci_lo  = result["Boot_95CI_Low"]
     ci_hi  = result["Boot_95CI_High"]
     es     = result["Effect_Size"]
     eslbl  = result["Effect_Size_Type"]
 
-    txt = (f"{stars}\n"
-           f"Δ = {md:+.2f}\n"
+    txt = (f"Δ = {md:+.2f}\n"
            f"95 % CI [{ci_lo:.2f}, {ci_hi:.2f}]\n"
            f"{eslbl} = {es:.3f}")
 
@@ -442,7 +446,7 @@ def _ga_panel(ax_raw, ax_eff, result, boot_means,
     ax_raw : left axes — raw slopegraph
     ax_eff : right axes — effect-size axis
                * shares the SAME y-scale as ax_raw
-               * y is translated so that 0 aligns with Post mean
+               * y is translated so that 0 aligns with Pre mean (baseline)
     """
     pre    = result["_pre_raw"]
     post   = result["_post_raw"]
@@ -487,7 +491,7 @@ def _ga_panel(ax_raw, ax_eff, result, boot_means,
     method = result["Test_Used"]
     p_adj  = result["p_adj_FDR"]
     ax_raw.set_title(
-        f"{test}  (n = {n})\n{method},  $p_{{FDR}}$ = {p_adj:.4f}",
+        f"{test}  (n = {n})\n{method},  p_FDR = {p_adj:.4f}",
         fontsize=title_fontsize, pad=5,
     )
     if panel_label:
@@ -495,13 +499,17 @@ def _ga_panel(ax_raw, ax_eff, result, boot_means,
                     fontsize=14, fontweight="bold", va="top", ha="left")
 
     # --- effect axis ---
-    # The Gardner-Altman convention: the right axis y=0 corresponds to Post mean.
-    post_mean = post.mean()
+    # Gardner-Altman convention (Ho et al. 2019, Nat Methods): the effect-size
+    # axis zero aligns with the mean of the REFERENCE/baseline group. In a
+    # paired pre-post design, Pre is the baseline, so 0 aligns with Pre-mean
+    # (not Post-mean) -- this lets the effect dot be read directly as "how
+    # far above/below the starting point" on the same visual scale.
+    pre_mean = pre.mean()
     raw_ylim  = ax_raw.get_ylim()
 
-    # Transform: effect_y = raw_y - post_mean  →  raw_y = effect_y + post_mean
-    eff_lo = raw_ylim[0] - post_mean
-    eff_hi = raw_ylim[1] - post_mean
+    # Transform: effect_y = raw_y - pre_mean  ->  raw_y = effect_y + pre_mean
+    eff_lo = raw_ylim[0] - pre_mean
+    eff_hi = raw_ylim[1] - pre_mean
     ax_eff.set_ylim(eff_lo, eff_hi)
 
     _draw_effect_violin(ax_eff, boot_means, mean_d, ci_lo, ci_hi,
@@ -526,9 +534,9 @@ def make_ga_plot(result, out_path):
     """
     Single-test Gardner-Altman estimation plot.
     Raw data on the LEFT (wider); effect-size axis on the RIGHT.
-    The two axes share the same y-scale; the right axis is shifted so 0 = Post mean.
+    The two axes share the same y-scale; the right axis is shifted so 0 = Pre mean.
     """
-    boot_means = _bootstrap_dist(result["_diff_raw"])
+    boot_means = result["_boot_dist_raw"]  # same resample used for the reported CI (no re-draw)
 
     fig = plt.figure(figsize=(6.0, 4.8))
     ax_raw = fig.add_axes([0.12, 0.13, 0.52, 0.74])
@@ -556,7 +564,7 @@ def make_combined_ga_figure(results, out_path):
 
     import matplotlib.gridspec as gridspec
 
-    boot_dists = [_bootstrap_dist(r["_diff_raw"]) for r in results]
+    boot_dists = [r["_boot_dist_raw"] for r in results]  # reuse, same resample as reported CI
     panel_labels = [chr(ord("A") + i) for i in range(len(results))]
 
     fig = plt.figure(figsize=(12, 14))
@@ -581,57 +589,41 @@ def make_combined_ga_figure(results, out_path):
         outer[2, 1],     # DSB
     ]
 
+    # Reference x-coordinates for a single-column cell's raw/eff split (using
+    # column 0, row 1 -- i.e. panel B's cell -- as the template). Panel A will
+    # be placed at EXACTLY these x-boundaries, rather than re-deriving them
+    # via a ratio split of the double-width row cell (which was subtly wrong:
+    # it silently absorbed half of the inter-column wspace gap into the
+    # content width, making A ~14% wider than B/D and shifting its "A" label).
+    _ref_inner = gridspec.GridSpecFromSubplotSpec(
+        1, 2, subplot_spec=outer[1, 0], width_ratios=[3.4, 0.9], wspace=0.02,
+    )
+    _ref_raw_bbox = _ref_inner[0].get_position(fig)
+    _ref_eff_bbox = _ref_inner[1].get_position(fig)
+
     for result, label, boot, cell in zip(
             results,
             panel_labels,
             boot_dists,
             panel_positions):
 
-        inner = gridspec.GridSpecFromSubplotSpec(
-            1,
-            2,
-            subplot_spec=cell,
-            width_ratios=[3.4, 0.9],
-            wspace=0.02,
-        )
-
-        ax_raw = fig.add_subplot(inner[0])
-        ax_eff = fig.add_subplot(inner[1])
-        
         if label == "A":
-            pos_raw = ax_raw.get_position()
-            pos_eff = ax_eff.get_position()
-
-            # Current total width of panel
-            total_left = pos_raw.x0
-            total_right = pos_eff.x1
-            total_width = total_right - total_left
-
-            shrink = 0.82        # keep 82% of current width
-            shift_left = 0.02    # shift slightly left
-
-            new_width = total_width * shrink
-            new_left = total_left + shift_left
-
-            raw_frac = 3.4 / (3.4 + 0.9)
-            eff_frac = 0.9 / (3.4 + 0.9)
-
-            raw_w = new_width * raw_frac
-            eff_w = new_width * eff_frac
-
-            ax_raw.set_position([
-                new_left,
-                pos_raw.y0,
-                raw_w,
-                pos_raw.height,
-            ])
-
-            ax_eff.set_position([
-                new_left + raw_w,
-                pos_eff.y0,
-                eff_w,
-                pos_eff.height,
-            ])
+            # Use column-0's exact x-range (from the reference split above),
+            # combined with panel A's own row's y-range, so A's raw/eff axes
+            # are pixel-identical in width and x-position to B/D's.
+            row_bbox = cell.get_position(fig)
+            y0, y1 = row_bbox.y0, row_bbox.y1
+            ax_raw = fig.add_axes([_ref_raw_bbox.x0, y0,
+                                    _ref_raw_bbox.width, y1 - y0])
+            ax_eff = fig.add_axes([_ref_eff_bbox.x0, y0,
+                                    _ref_eff_bbox.width, y1 - y0])
+        else:
+            inner = gridspec.GridSpecFromSubplotSpec(
+                1, 2, subplot_spec=cell,
+                width_ratios=[3.4, 0.9], wspace=0.02,
+            )
+            ax_raw = fig.add_subplot(inner[0])
+            ax_eff = fig.add_subplot(inner[1])
 
         _ga_panel(
             ax_raw,
