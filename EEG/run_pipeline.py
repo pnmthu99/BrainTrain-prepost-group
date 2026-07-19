@@ -42,9 +42,9 @@ from phase0_channel_harmonization import CANONICAL_EEG_CHANNELS
 # Neurosoft subjects: list of exactly 1 file for each timepoint.
 # ----------------------------------------------------------------------
 from discovered_subject_file_map import SUBJECT_FILE_MAP
-SUBJECT_FILE_MAP = {"B02": SUBJECT_FILE_MAP["B02"]}
+SUBJECT_FILE_MAP = {"B02": SUBJECT_FILE_MAP["B02"]}  # dùng B02 vì B01 pre từng có vấn đề marker
 
-APPLY_ICA = False       # set False for a quick structural test run (much faster, skips artifact removal)
+APPLY_ICA = True       # set False for a quick structural test run (much faster, skips artifact removal)
 OUTPUT_CSV = "eeg_feature_table.csv"
 QC_LOG_CSV = "eeg_qc_log.csv"
 
@@ -149,14 +149,14 @@ if __name__ == "__main__":
 
         def make_synthetic_natus_raw(seed):
             natus_labels = [
-                "EEG FP1-R_Fp1[FP", "EEG Fpz-R_Fpz[FP", "EEG FP2-R_Fp2[FP",
+                "EEG FP1-R_Fp1[FP", "EEG FP2-R_Fp2[FP",
                 "EEG F7-R_F7[F7]1", "EEG F3-R_F3[F3]1", "EEG Fz-R_Fz[Fz]1",
                 "EEG F4-R_F4[F4]1", "EEG F8-R_F8[F8]1",
                 "EEG 20-R_T7[20]", "EEG C3-R_C3[C3]1", "EEG Cz-R_Cz[Cz]1",
                 "EEG C4-R_C4[C4]1", "EEG 21-R_T8[21]",
                 "EEG 3-R_P7[3]", "EEG P3-R_P3[P3]1", "EEG Pz-R_Pz[Pz]1",
                 "EEG P4-R_P4[P4]1", "EEG 19-R_P8[19]",
-                "EEG O1-R_O1[O1]1", "EEG Oz-R_Oz[Oz]1", "EEG O2-R_O2[O2]1",
+                "EEG O1-R_O1[O1]1", "EEG O2-R_O2[O2]1",
                 "EEG 1-R_A1[1]", "EEG 2-R_A2[2]",
             ]
             sfreq = 512

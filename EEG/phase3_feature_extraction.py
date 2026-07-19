@@ -230,8 +230,8 @@ if __name__ == "__main__":
     ch_names = ["Fp1", "Fp2", "F3", "F4", "Fz", "F7", "F8",  # Frontal
                 "C3", "C4", "Cz",                              # Central
                 "P3", "P4", "Pz",                               # Parietal
-                "T7", "T8", "P7", "P8",                         # Temporal
-                "O1", "O2", "Oz"]                                # Occipital
+                "T3", "T4", "T5", "T6",                         # Temporal
+                "O1", "O2"]                                      # Occipital
     n_ch = len(ch_names)
     t = np.arange(int(sfreq * duration_sec)) / sfreq
     rng = np.random.default_rng(0)

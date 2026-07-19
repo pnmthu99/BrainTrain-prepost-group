@@ -37,7 +37,11 @@ BANDPASS_HIGH = 45.0
 NOTCH_FREQ = 50.0  # Vietnam mains frequency
 FLAT_THRESHOLD_UV = 1.0      # channel considered "flat"/dead below this (µV, peak-to-peak over a window)
 NOISY_ZSCORE_THRESHOLD = 4.0  # channel variance z-score above this -> flagged noisy
-FRONTAL_EOG_PROXY = "Fp1"     # used as an EOG-proxy channel for automatic blink detection
+
+# ICLabel automatic rejection config (see _run_ica docstring for the
+# literature justification of this threshold and category choice)
+ICLABEL_THRESHOLD = 0.80
+ICLABEL_AUTO_REJECT_CATEGORIES = {"eye blink", "muscle artifact"}
 
 
 def set_standard_montage(raw):
@@ -134,11 +138,9 @@ def preprocess_raw(raw, machine, apply_ica=True, verbose=True):
     report["resampled_from_hz"] = orig_sfreq
     report["resampled_to_hz"] = TARGET_SFREQ
 
-    # --- Step 5: filter ---
-    raw.filter(l_freq=BANDPASS_LOW, h_freq=BANDPASS_HIGH, fir_design="firwin", verbose=verbose)
-    raw.notch_filter(freqs=[NOTCH_FREQ], verbose=verbose)
-
-    # --- Step 6: montage + interpolate the bads found back in Step 1 ---
+    # --- Step 5: montage + interpolate bads (done BEFORE filtering branches
+    # so both the main analysis data and the ICA copy get the same clean
+    # channel set) ---
     set_standard_montage(raw)
     raw.info["bads"] = [ch for ch in bads_canonical if ch in raw.ch_names]
     if raw.info["bads"]:
@@ -146,48 +148,101 @@ def preprocess_raw(raw, machine, apply_ica=True, verbose=True):
             print(f"  Bad channels (detected pre-reref): {raw.info['bads']} -- interpolating.")
         raw.interpolate_bads(reset_bads=True)
 
-    # --- Step 7: ICA ---
+    # --- Step 6: branch a WIDEBAND (1-100 Hz) copy for ICA/ICLabel, BEFORE
+    # the main analysis filter below removes content above 45 Hz. This must
+    # happen here, not inside _run_ica, since filtering is destructive --
+    # you cannot recover frequency content (like the >45Hz muscle-artifact
+    # signature ICLabel needs) after a lowpass has already removed it. ---
+    raw_for_ica = None
     if apply_ica:
-        raw, ica_report = _run_ica(raw, verbose=verbose)
+        raw_for_ica = raw.copy().filter(l_freq=1.0, h_freq=100.0, fir_design="firwin", verbose=verbose)
+
+    # --- Step 7: main analysis filter (0.5-45 Hz + notch) ---
+    raw.filter(l_freq=BANDPASS_LOW, h_freq=BANDPASS_HIGH, fir_design="firwin", verbose=verbose)
+    raw.notch_filter(freqs=[NOTCH_FREQ], verbose=verbose)
+
+    # --- Step 8: ICA (fit on the wideband copy, apply cleaning to the
+    # actual 0.5-45Hz analysis data) ---
+    if apply_ica:
+        raw, ica_report = _run_ica(raw, raw_for_ica, verbose=verbose)
         report["ica"] = ica_report
 
     return raw, report
 
 
-def _run_ica(raw, verbose=True):
+def _run_ica(raw, raw_for_ica, verbose=True):
     """
-    Fits ICA and automatically flags likely eye-blink and muscle components.
-    Uses a frontal channel as an EOG proxy since neither machine has a
-    dedicated EOG channel.
+    Fits ICA and uses ICLabel (mne_icalabel) to automatically classify and
+    remove artifact components -- eye and muscle, at ICLABEL_THRESHOLD
+    probability. This replaces the earlier manual EOG-proxy-channel +
+    find_bads_muscle heuristic, following the approach in the prior
+    BrainTrain analysis scripts (which used ICLabel via EEGLAB).
+
+    Threshold justification (literature-grounded, not arbitrary): published
+    ICLabel pipelines commonly use 80-90% probability as the automatic
+    rejection threshold for "eye" and "muscle" categories specifically
+    (Pion-Tonachini et al. 2019 introduce ICLabel; EEGLAB's default ICLabel
+    rejection function uses >90%; several other published pipelines use
+    80% as a slightly less conservative common choice). Other ICLabel
+    categories ("heart", "line noise", "channel noise", "other") are
+    deliberately NOT auto-rejected here -- classification reliability for
+    those categories is lower, and manual review is safer.
+
+    Parameters
+    ----------
+    raw : the ACTUAL 0.5-45Hz analysis data -- ICA cleaning is applied here.
+    raw_for_ica : a 1-100Hz filtered copy of the SAME data, branched off by
+        the caller BEFORE the destructive 45Hz lowpass was applied to `raw`.
+        ICA is fit and ICLabel-classified on this copy, since muscle
+        artifacts have broadband power above 45Hz that ICLabel needs to
+        see -- fitting on the already-lowpassed `raw` would hide exactly
+        the signature needed to identify muscle components. See caller
+        (preprocess_raw) for where this branch point happens.
+
+    KNOWN LIMITATION: ICLabel's classifier was ALSO trained on data using
+    average reference. This pipeline uses A1 (single-mastoid) reference
+    throughout, chosen for cross-machine comparability (see project
+    discussion on Natus vs Neurosoft reference constraints). Unlike the
+    filtering branch above, changing reference between ICA fit and apply
+    is NOT done here -- MNE explicitly warns that changing reference after
+    fitting ICA can degrade component interpretability more than it helps,
+    since it's a fundamentally different kind of transform than filtering.
+    So reference is kept consistent (A1) throughout, at the cost of some
+    ICLabel accuracy relative to its average-reference training data. This
+    should be noted as a limitation in Methods.
     """
+    from mne_icalabel import label_components
+
     ica = mne.preprocessing.ICA(n_components=0.99, method="infomax",
                                  fit_params=dict(extended=True),
                                  random_state=42, max_iter="auto")
-    ica.fit(raw, verbose=verbose)
+    ica.fit(raw_for_ica, verbose=verbose)
 
-    eog_indices = []
-    if FRONTAL_EOG_PROXY in raw.ch_names:
-        try:
-            eog_indices, eog_scores = ica.find_bads_eog(raw, ch_name=FRONTAL_EOG_PROXY, verbose=verbose)
-        except Exception as e:
-            if verbose:
-                print(f"  EOG-proxy detection failed ({e}), skipping.")
+    ic_labels = label_components(raw_for_ica, ica, method="iclabel")
+    labels = ic_labels["labels"]
+    probs = ic_labels["y_pred_proba"]
 
-    muscle_indices = []
-    try:
-        muscle_indices, muscle_scores = ica.find_bads_muscle(raw, verbose=verbose)
-    except Exception as e:
-        if verbose:
-            print(f"  Muscle-artifact detection failed ({e}), skipping.")
+    exclude = [
+        idx for idx, (label, prob) in enumerate(zip(labels, probs))
+        if label in ICLABEL_AUTO_REJECT_CATEGORIES and prob >= ICLABEL_THRESHOLD
+    ]
 
-    exclude = sorted(set(eog_indices) | set(muscle_indices))
     ica.exclude = exclude
-    raw = ica.apply(raw, verbose=verbose)
+    raw = ica.apply(raw, verbose=verbose)  # applied to the ORIGINAL 0.5-45Hz analysis data
 
     if verbose:
-        print(f"  ICA: {len(exclude)} component(s) removed (EOG-like: {eog_indices}, muscle-like: {muscle_indices})")
+        print(f"  ICA/ICLabel: {len(exclude)}/{len(labels)} component(s) removed.")
+        for idx in exclude:
+            print(f"    component {idx}: {labels[idx]} (p={probs[idx]:.2f})")
 
-    return raw, {"n_components_removed": len(exclude), "eog_like": eog_indices, "muscle_like": muscle_indices}
+    report = {
+        "n_components_total": len(labels),
+        "n_components_removed": len(exclude),
+        "excluded_indices": exclude,
+        "all_labels": labels,
+        "all_probabilities": [round(float(p), 3) for p in probs],
+    }
+    return raw, report
 
 
 def reref_natus_to_a1(raw_before_harmonization):

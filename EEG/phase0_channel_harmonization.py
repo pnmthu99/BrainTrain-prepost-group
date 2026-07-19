@@ -23,8 +23,10 @@ Confirmed from edf_inspection_report.csv
   per subject/timepoint. Already hardware-referenced to A1 (channel names
   end in "-A1"). Uses OLD temporal naming (T3, T4, T5, T6).
 
-Both machines otherwise cover the same 21 standard 10-20 scalp sites once
-harmonized, so no channels need to be dropped from the common set.
+Both machines otherwise cover the same 19 scalp sites used in this
+project's canonical channel set (matching prior BrainTrain analysis
+scripts: no Fpz/Oz, temporal sites use old T3/T4/T5/T6 naming), so no
+channels need to be dropped from the common set.
 """
 
 import re
@@ -34,20 +36,23 @@ import mne
 # Canonical channel set (target names every raw channel gets mapped to)
 # ----------------------------------------------------------------------
 CANONICAL_EEG_CHANNELS = [
-    "Fp1", "Fpz", "Fp2",
+    "Fp1", "Fp2",
     "F7", "F3", "Fz", "F4", "F8",
-    "T7", "C3", "Cz", "C4", "T8",
-    "P7", "P3", "Pz", "P4", "P8",
-    "O1", "Oz", "O2",
+    "C3", "Cz", "C4",
+    "P3", "Pz", "P4",
+    "T3", "T4", "T5", "T6",
+    "O1", "O2",
 ]
 
-# Old (Jasper 1958) -> modern (ACNS 1994) temporal electrode naming.
-# Applied BEFORE canonical matching so both conventions converge.
-OLD_TO_NEW_TEMPORAL = {
-    "T3": "T7",
-    "T4": "T8",
-    "T5": "P7",
-    "T6": "P8",
+# Modern (ACNS 1994) -> old (Jasper 1958) temporal electrode naming.
+# This project's canonical set uses the OLD convention (T3/T4/T5/T6), to
+# stay consistent with prior BrainTrain analysis scripts. Applied BEFORE
+# canonical matching so files using either convention converge to T3/T4/T5/T6.
+NEW_TO_OLD_TEMPORAL = {
+    "T7": "T3",
+    "T8": "T4",
+    "P7": "T5",
+    "P8": "T6",
 }
 
 # ROI clusters used for feature extraction (Phase 3). Defined on canonical
@@ -56,8 +61,8 @@ ROI_CLUSTERS = {
     "Frontal":  ["Fp1", "Fp2", "F3", "F4", "Fz", "F7", "F8"],
     "Central":  ["C3", "C4", "Cz"],
     "Parietal": ["P3", "P4", "Pz"],
-    "Temporal": ["T7", "T8", "P7", "P8"],
-    "Occipital": ["O1", "O2", "Oz"],
+    "Temporal": ["T3", "T4", "T5", "T6"],
+    "Occipital": ["O1", "O2"],
 }
 
 # Non-EEG channels seen on the Natus/PSG-style system -- explicitly
@@ -76,13 +81,13 @@ def _clean_token(token):
 def _canonical_lookup():
     """
     Builds a dict mapping UPPERCASE variants (old or new naming) to the
-    canonical mixed-case name, e.g. {"T3": "T7", "T7": "T7", "FP1": "Fp1"}.
+    canonical mixed-case name, e.g. {"T7": "T3", "T3": "T3", "FP1": "Fp1"}.
     """
     lookup = {}
     for name in CANONICAL_EEG_CHANNELS:
         lookup[_clean_token(name)] = name
-    for old, new in OLD_TO_NEW_TEMPORAL.items():
-        lookup[_clean_token(old)] = new
+    for new, old in NEW_TO_OLD_TEMPORAL.items():
+        lookup[_clean_token(new)] = old
     return lookup
 
 
