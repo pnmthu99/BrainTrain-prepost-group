@@ -63,7 +63,9 @@ from phase0_channel_harmonization import (
 SUBJECT_ID = "B02"
 TIMEPOINT = "pre"
 RUN_FILES = [
-    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B02_00/B02_00.edf",
+    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B01_01T/B01_01TR1.edf",
+    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B01_01T/B01_01TR2.edf",
+    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B01_01T/B01_01TR3.edf",
     # add more run files here if this subject/timepoint has them, e.g.:
     # "/path/B02_00R2.edf",
     # "/path/B02_00R3.edf",
@@ -80,7 +82,7 @@ BANDPASS_LOW = 0.5
 BANDPASS_HIGH = 45.0
 NOTCH_FREQ = 50.0
 
-ICLABEL_THRESHOLD = 0.80
+ICLABEL_THRESHOLD = 0.9
 ICLABEL_AUTO_REJECT_CATEGORIES = {"eye blink", "muscle artifact"}
 
 SUBEPOCH_SEC = 4.0
@@ -227,8 +229,16 @@ def build_epochs(raw):
 
     events = np.array(valid_events, dtype=int)
 
+    # reject_by_annotation=False: MNE auto-inserts "BAD boundary" annotations
+    # at concatenation seams (Natus: joining 3 run files) -- with the
+    # default reject_by_annotation=True, any epoch whose 60s window happens
+    # to overlap one of these seams gets SILENTLY dropped, which can lose
+    # real task epochs for no data-quality reason. Our own sub-epoch
+    # amplitude QC (later, in feature extraction) and ICA/ICLabel already
+    # handle genuine artifact rejection, so we don't need MNE's
+    # annotation-based rejection here.
     epochs = mne.Epochs(raw, events, event_id=event_id, tmin=0, tmax=TASK_DURATION_SEC,
-                         baseline=None, preload=True, verbose=False)
+                         baseline=None, preload=True, reject_by_annotation=False, verbose=False)
     return epochs
 
 
@@ -244,7 +254,7 @@ def run_ica_iclabel(epochs, raw_for_ica):
 
     epochs_for_ica = mne.Epochs(raw_for_ica, epochs.events, event_id=epochs.event_id,
                                  tmin=0, tmax=TASK_DURATION_SEC, baseline=None,
-                                 preload=True, verbose=False)
+                                 preload=True, reject_by_annotation=False, verbose=False)
     ica.fit(epochs_for_ica, verbose=False)
 
     ic_labels = label_components(epochs_for_ica, ica, method="iclabel")

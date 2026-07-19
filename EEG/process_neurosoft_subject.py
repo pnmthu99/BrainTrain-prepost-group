@@ -182,8 +182,16 @@ def build_epochs(raw):
 
     events = np.array(valid_events, dtype=int)
 
+    # reject_by_annotation=False: MNE auto-inserts "BAD boundary" annotations
+    # at concatenation seams (Natus: joining 3 run files) -- with the
+    # default reject_by_annotation=True, any epoch whose 60s window happens
+    # to overlap one of these seams gets SILENTLY dropped, which can lose
+    # real task epochs for no data-quality reason. Our own sub-epoch
+    # amplitude QC (later, in feature extraction) and ICA/ICLabel already
+    # handle genuine artifact rejection, so we don't need MNE's
+    # annotation-based rejection here.
     epochs = mne.Epochs(raw, events, event_id=event_id, tmin=0, tmax=TASK_DURATION_SEC,
-                         baseline=None, preload=True, verbose=False)
+                         baseline=None, preload=True, reject_by_annotation=False, verbose=False)
     return epochs
 
 
@@ -199,7 +207,7 @@ def run_ica_iclabel(epochs, raw_for_ica):
 
     epochs_for_ica = mne.Epochs(raw_for_ica, epochs.events, event_id=epochs.event_id,
                                  tmin=0, tmax=TASK_DURATION_SEC, baseline=None,
-                                 preload=True, verbose=False)
+                                 preload=True, reject_by_annotation=False, verbose=False)
     ica.fit(epochs_for_ica, verbose=False)
 
     ic_labels = label_components(epochs_for_ica, ica, method="iclabel")
