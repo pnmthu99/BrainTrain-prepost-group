@@ -69,8 +69,18 @@ BANDPASS_LOW = 0.5
 BANDPASS_HIGH = 45.0
 NOTCH_FREQ = 50.0
 
-ICLABEL_THRESHOLD = 0.80
-ICLABEL_AUTO_REJECT_CATEGORIES = {"eye blink", "muscle artifact"}
+ICLABEL_THRESHOLD = 0.90
+# eye/muscle: well-established, high classification reliability (EEGLAB's
+# own default; also the final choice in a published pipeline-comparison
+# paper after testing 0.5-0.9). heart beat: added per literature review --
+# ECG contamination has a very distinctive waveform, reliably classified,
+# and NOT caught by any other step in this pipeline. line noise and
+# channel noise deliberately excluded: line noise is already handled by
+# the notch filter before ICA runs, and channel noise is largely handled
+# by the explicit bad-channel detection/interpolation step -- auto-
+# rejecting them again here would risk double-handling the same artifact
+# through two different (and not perfectly consistent) mechanisms.
+ICLABEL_AUTO_REJECT_CATEGORIES = {"eye blink", "muscle artifact", "heart beat"}
 
 SUBEPOCH_SEC = 4.0
 REJECT_PTP_UV = 150.0
@@ -109,7 +119,9 @@ def load_and_preprocess_channels(file_path):
 
 
 # ======================================================================
-# Step 3: resample, montage + interpolate, filter (+ ICA branch)
+# Step 3: resample, montage + interpolate, ONE wide-band filter (1-100Hz,
+# matches ICLabel's expected range). The narrower 0.5-45Hz analysis
+# filter is applied LATER, after ICA cleaning, directly on the epochs.
 # ======================================================================
 def preprocess(raw):
     orig_sfreq = raw.info["sfreq"]
@@ -122,14 +134,10 @@ def preprocess(raw):
         print(f"  Interpolating bad channel(s): {raw.info['bads']}")
         raw.interpolate_bads(reset_bads=True)
 
-    raw_for_ica = None
-    if APPLY_ICA:
-        raw_for_ica = raw.copy().filter(l_freq=1.0, h_freq=100.0, fir_design="firwin", verbose=False)
-
-    raw.filter(l_freq=BANDPASS_LOW, h_freq=BANDPASS_HIGH, fir_design="firwin", verbose=False)
     raw.notch_filter(freqs=[NOTCH_FREQ], verbose=False)
+    raw.filter(l_freq=1.0, h_freq=100.0, fir_design="firwin", verbose=False)
 
-    return raw, raw_for_ica
+    return raw
 
 
 # ======================================================================
@@ -139,7 +147,7 @@ def _normalize_marker(description):
     return description.split("(")[0].strip().upper()
 
 
-def build_epochs(raw):
+def build_epochs(raw, stage_label=""):
     events_list = []
     for annot in raw.annotations:
         label = _normalize_marker(annot["description"])
@@ -154,10 +162,11 @@ def build_epochs(raw):
             print(f"    {annot['description']!r}")
         return None
 
-    events = np.array(sorted(events_list, key=lambda x: x[0]))
+    events = np.array(sorted(events_list, key=lambda x: x[0]), dtype=int)
     event_id = {label: i + 1 for i, label in enumerate(TASK_LABELS)}
 
-    print("\n  Epoch counts found per marker (expect ~3 each, one per run):")
+    print(f"\n  Epoch counts found per marker{f' ({stage_label})' if stage_label else ''} "
+          f"(expect ~3 each, one per run):")
     for label, code in event_id.items():
         n = int(np.sum(events[:, 2] == code))
         print(f"    {label}: {n}")
@@ -196,21 +205,20 @@ def build_epochs(raw):
 
 
 # ======================================================================
-# Step 5: ICA + ICLabel
+# Step 5: ICA + ICLabel (fit directly on epochs, already filtered
+# 1-100Hz continuous data -- ICA applied to the continuous raw, not
+# epochs, per EEGLAB guidance: filtering/cleaning already-epoched data
+# can introduce edge artifacts at epoch boundaries)
 # ======================================================================
-def run_ica_iclabel(epochs, raw_for_ica):
+def run_ica_iclabel(raw, epochs_for_fitting):
     from mne_icalabel import label_components
 
     ica = mne.preprocessing.ICA(n_components=0.99, method="infomax",
                                  fit_params=dict(extended=True),
                                  random_state=42, max_iter="auto")
+    ica.fit(epochs_for_fitting, verbose=False)
 
-    epochs_for_ica = mne.Epochs(raw_for_ica, epochs.events, event_id=epochs.event_id,
-                                 tmin=0, tmax=TASK_DURATION_SEC, baseline=None,
-                                 preload=True, reject_by_annotation=False, verbose=False)
-    ica.fit(epochs_for_ica, verbose=False)
-
-    ic_labels = label_components(epochs_for_ica, ica, method="iclabel")
+    ic_labels = label_components(epochs_for_fitting, ica, method="iclabel")
     labels = ic_labels["labels"]
     probs = ic_labels["y_pred_proba"]
 
@@ -224,8 +232,8 @@ def run_ica_iclabel(epochs, raw_for_ica):
     for idx in exclude:
         print(f"    component {idx}: {labels[idx]} (p={probs[idx]:.2f})")
 
-    epochs_clean = ica.apply(epochs.copy(), verbose=False)
-    return epochs_clean, {"n_removed": len(exclude), "labels": labels, "probabilities": [round(float(p), 3) for p in probs]}
+    raw_clean = ica.apply(raw.copy(), verbose=False)
+    return raw_clean, {"n_removed": len(exclude), "labels": labels, "probabilities": [round(float(p), 3) for p in probs]}
 
 
 # ======================================================================
@@ -357,15 +365,27 @@ def main():
     print("=" * 70)
 
     raw = load_and_preprocess_channels(FILE_PATH)
-    raw, raw_for_ica = preprocess(raw)
+    raw = preprocess(raw)  # wide-band filter (1-100Hz) on continuous data
 
-    epochs = build_epochs(raw)
-    if epochs is None:
+    epochs_for_fitting = build_epochs(raw, stage_label="wide-band, for ICA fitting")
+    if epochs_for_fitting is None:
         print("\nABORTING: no epochs could be built (see marker warning above).")
         return
 
     if APPLY_ICA:
-        epochs, ica_report = run_ica_iclabel(epochs, raw_for_ica)
+        raw, ica_report = run_ica_iclabel(raw, epochs_for_fitting)
+
+    # narrow analysis filter (0.5-45Hz), still on CONTINUOUS data (per
+    # EEGLAB guidance: filter continuous data, not already-epoched data)
+    raw.filter(l_freq=BANDPASS_LOW, h_freq=BANDPASS_HIGH, fir_design="firwin", verbose=False)
+
+    # final epoching, from the now fully-cleaned + narrow-filtered
+    # continuous raw -- this is the epochs object used for feature
+    # extraction and saved to disk
+    epochs = build_epochs(raw, stage_label="final, post-ICA + narrow filter")
+    if epochs is None:
+        print("\nABORTING: no epochs remained after final filtering (unexpected).")
+        return
 
     os.makedirs(EPOCHS_DIR, exist_ok=True)
     epo_path = os.path.join(EPOCHS_DIR, f"{SUBJECT_ID}_{TIMEPOINT}-epo.fif")
