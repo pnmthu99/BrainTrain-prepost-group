@@ -46,7 +46,7 @@ import mne
 from mne.time_frequency import psd_array_welch
 import antropy as ant
 
-from phase0_channel_harmonization import (
+from channel_harmonization import (
     harmonize_raw, harmonize_channel_name, ROI_CLUSTERS, CANONICAL_EEG_CHANNELS,
 )
 
