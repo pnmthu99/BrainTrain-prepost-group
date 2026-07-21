@@ -113,10 +113,15 @@ def parse_natus_label(raw_label):
 def parse_neurosoft_label(raw_label):
     """
     Neurosoft labels look like "FP1-A1", "T3-A1", "FZ-A1" -- already
-    hardware-referenced to A1. Strip the "-A1" (or "-A2") reference suffix
-    to recover the electrode name.
+    hardware-referenced to A1. Some exports also prefix with "EEG "
+    (e.g. "EEG FP1-A1", confirmed from real data) -- strip both the
+    leading "EEG " and the trailing "-A1"/"-A2" reference suffix to
+    recover the electrode name.
     """
-    return re.sub(r"-A[12]$", "", raw_label.strip(), flags=re.IGNORECASE)
+    label = raw_label.strip()
+    label = re.sub(r"^EEG\s+", "", label, flags=re.IGNORECASE)
+    label = re.sub(r"-A[12]$", "", label, flags=re.IGNORECASE)
+    return label
 
 
 def harmonize_channel_name(raw_label, machine):
