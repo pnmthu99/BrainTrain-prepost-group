@@ -213,7 +213,7 @@ def build_epochs(raw, stage_label=""):
 def run_ica_iclabel(epochs):
     from mne_icalabel import label_components
 
-    ica = mne.preprocessing.ICA(n_components=0.99, method="infomax",
+    ica = mne.preprocessing.ICA(n_components=15, method="infomax",
                                  fit_params=dict(extended=True),
                                  random_state=42, max_iter="auto")
     ica.fit(epochs, verbose=False)

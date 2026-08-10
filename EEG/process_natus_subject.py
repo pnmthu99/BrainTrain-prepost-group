@@ -60,12 +60,11 @@ from channel_harmonization import (
 # ======================================================================
 # CONFIG -- edit this for each subject/timepoint you run
 # ======================================================================
-SUBJECT_ID = "B02"
-TIMEPOINT = "pre"
+SUBJECT_ID = "B04"
+TIMEPOINT = "post"
 RUN_FILES = [
-    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B04_00/B04_00R1.edf",
-    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B04_00/B04_00R2.edf",
-    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B04_00/B04_00R3.edf",
+    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B04_01T/B04_01TR2.edf",
+    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B04_01T/B04_01TR3.edf",
     # add more run files here if this subject/timepoint has them
 ]
 EPOCHS_DIR = "./epochs"      # where to save the cleaned epochs (.fif)
@@ -260,7 +259,7 @@ def build_epochs(raw, stage_label=""):
 def run_ica_iclabel(epochs):
     from mne_icalabel import label_components
 
-    ica = mne.preprocessing.ICA(n_components=0.99, method="infomax",
+    ica = mne.preprocessing.ICA(n_components=15, method="infomax",
                                  fit_params=dict(extended=True),
                                  random_state=42, max_iter="auto")
     ica.fit(epochs, verbose=False)
