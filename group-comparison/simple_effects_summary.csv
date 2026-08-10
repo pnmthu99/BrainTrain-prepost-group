@@ -1,0 +1,11 @@
+Test,Group,N,Mean_Diff,Shapiro_p,Test_Used,Statistic,p_value,Effect_Size_Type,Effect_Size,Direction,p_adj_FDR,Significant_after_FDR
+MMSE,Low,17,0.53,0.0305,Wilcoxon signed-rank,21.0,0.28,Rank-biserial r,0.364,Improved,0.6848,False
+TMT-A,Low,17,5.06,0.3152,Paired t-test,0.614,0.5479,Cohen's dz,0.149,Worsened/No change,0.6848,False
+TMT-B,Low,17,-2.59,0.9148,Paired t-test,-0.162,0.8736,Cohen's dz,-0.039,Improved,0.8736,False
+Digit Span Forward,Low,17,-0.29,0.0859,Paired t-test,-0.735,0.4728,Cohen's dz,-0.178,Worsened/No change,0.6848,False
+Digit Span Backward,Low,17,0.29,0.7726,Paired t-test,0.689,0.5005,Cohen's dz,0.167,Improved,0.6848,False
+MMSE,High,19,2.05,0.5927,Paired t-test,4.385,0.0004,Cohen's dz,1.006,Improved,0.0018,True
+TMT-A,High,19,-14.63,0.007,Wilcoxon signed-rank,66.0,0.243,Rank-biserial r,-0.305,Improved,0.405,False
+TMT-B,High,19,-19.05,0.0002,Wilcoxon signed-rank,22.5,0.1078,Rank-biserial r,-0.505,Improved,0.2694,False
+Digit Span Forward,High,19,-0.26,0.1163,Paired t-test,-0.478,0.6384,Cohen's dz,-0.11,Worsened/No change,0.6384,False
+Digit Span Backward,High,19,-0.42,0.2402,Paired t-test,-0.634,0.5338,Cohen's dz,-0.146,Worsened/No change,0.6384,False

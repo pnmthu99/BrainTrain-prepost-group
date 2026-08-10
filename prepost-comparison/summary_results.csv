@@ -1,0 +1,6 @@
+Test,N,Mean_Pre,SD_Pre,Mean_Post,SD_Post,Mean_Diff,Boot_95CI_Low,Boot_95CI_High,Shapiro_p,Test_Used,Statistic,p_value,Effect_Size_Type,Effect_Size,Direction,p_adj_FDR,Significant_after_FDR
+MMSE,36,25.17,2.01,26.5,2.37,1.33,0.61,2.03,0.1198,Paired t-test,3.609,0.001,Cohen's dz,0.601,Improved,0.0048,True
+TMT-A,36,90.97,51.55,85.64,39.87,-5.33,-18.45,6.64,0.0037,Wilcoxon signed-rank,259.0,0.5103,Rank-biserial r,-0.129,Improved,0.6379,False
+TMT-B,36,228.06,72.01,216.78,76.95,-11.28,-32.22,8.81,0.0039,Wilcoxon signed-rank,132.5,0.2747,Rank-biserial r,-0.245,Improved,0.6379,False
+Digit Span Forward,36,8.36,2.27,8.08,2.22,-0.28,-0.94,0.39,0.0389,Wilcoxon signed-rank,130.5,0.3849,Rank-biserial r,-0.197,Worsened,0.6379,False
+Digit Span Backward,36,4.81,1.89,4.72,1.7,-0.08,-0.92,0.67,0.0377,Wilcoxon signed-rank,201.0,0.9633,Rank-biserial r,0.01,Worsened,0.9633,False

@@ -1,0 +1,6 @@
+Test,N_Low,N_High,Low_Mean_Pre,Low_Mean_Post,Low_Mean_Diff,Low_SEM_Diff,High_Mean_Pre,High_Mean_Post,High_Mean_Diff,High_SEM_Diff,Shapiro_Low_p,Shapiro_High_p,Interaction_Test,Statistic,p_value,Effect_Size_Type,Effect_Size,lower_is_better,p_adj_FDR,Significant_after_FDR
+MMSE,17,19,25.24,25.76,0.53,0.53,25.11,27.16,2.05,0.47,0.0305,0.5927,Mann-Whitney U,222.0,0.053,Rank-biserial r,-0.375,False,0.2648,False
+TMT-A,17,19,87.65,92.71,5.06,8.24,93.95,79.32,-14.63,9.92,0.3152,0.007,Mann-Whitney U,125.0,0.2538,Rank-biserial r,0.226,True,0.6198,False
+TMT-B,17,19,231.35,228.76,-2.59,16.01,225.11,206.05,-19.05,13.59,0.9148,0.0002,Mann-Whitney U,145.5,0.6195,Rank-biserial r,0.099,True,0.7744,False
+Digit Span Forward,17,19,7.59,7.29,-0.29,0.4,9.05,8.79,-0.26,0.55,0.0859,0.1163,Welch's t-test,0.045,0.964,Hedges' g,0.015,False,0.964,False
+Digit Span Backward,17,19,4.12,4.41,0.29,0.43,5.42,5.0,-0.42,0.66,0.7726,0.2402,Welch's t-test,-0.906,0.3719,Hedges' g,-0.288,False,0.6198,False
