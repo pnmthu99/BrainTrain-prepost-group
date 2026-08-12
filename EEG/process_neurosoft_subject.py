@@ -54,8 +54,8 @@ from channel_harmonization import (
 # CONFIG -- edit this for each subject/timepoint you run
 # ======================================================================
 SUBJECT_ID = "B57"
-TIMEPOINT = "pre"
-FILE_PATH = "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B57_00.edf"
+TIMEPOINT = "post"
+FILE_PATH = "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B57_01T.edf"
 
 EPOCHS_DIR = "./epochs"
 FEATURES_DIR = "./features"
