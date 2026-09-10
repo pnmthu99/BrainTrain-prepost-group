@@ -60,10 +60,10 @@ from channel_harmonization import (
 # ======================================================================
 # CONFIG -- edit this for each subject/timepoint you run
 # ======================================================================
-SUBJECT_ID = "B01"
+SUBJECT_ID = "B02"
 TIMEPOINT = "pre"
 RUN_FILES = [
-    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B01_00/B01_00.edf",
+    "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B02_00/B02_00.edf",
     # add more run files here if this subject/timepoint has them
 ]
 EPOCHS_DIR = "./epochs"      # where to save the cleaned epochs (.fif)

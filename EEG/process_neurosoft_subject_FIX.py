@@ -53,9 +53,9 @@ from channel_harmonization import (
 # ======================================================================
 # CONFIG -- edit this for each subject/timepoint you run
 # ======================================================================
-SUBJECT_ID = "B48"
+SUBJECT_ID = "B41"
 TIMEPOINT = "pre"
-FILE_PATH = "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B48_00.edf"
+FILE_PATH = "/mnt/data_lab513/thupnm/BrainTrain-prepost-group/EEG/raweeg_01m/B41_00.edf"
 
 EPOCHS_DIR = "./epochs"
 FEATURES_DIR = "./features"
@@ -163,11 +163,11 @@ def build_epochs(raw, stage_label=""):
         return None
 
     events = np.array(sorted(events_list, key=lambda x: x[0]), dtype=int)
-    event_id = {label: i + 1 for i, label in enumerate(TASK_LABELS)}
+    all_event_id = {label: i + 1 for i, label in enumerate(TASK_LABELS)}
 
     print(f"\n  Epoch counts found per marker{f' ({stage_label})' if stage_label else ''} "
           f"(expect ~3 each, one per run):")
-    for label, code in event_id.items():
+    for label, code in all_event_id.items():
         n = int(np.sum(events[:, 2] == code))
         print(f"    {label}: {n}")
 
@@ -190,6 +190,18 @@ def build_epochs(raw, stage_label=""):
         return None
 
     events = np.array(valid_events, dtype=int)
+
+    # MNE raises if event_id includes a marker that is absent from events.
+    # Keep only markers that survived the recording-duration check, so a
+    # partially recorded session can still be processed.
+    event_id = {
+        label: code for label, code in all_event_id.items()
+        if np.any(events[:, 2] == code)
+    }
+    missing_labels = [label for label in TASK_LABELS if label not in event_id]
+    if missing_labels:
+        print(f"  WARNING: no usable epoch(s) for marker(s): {', '.join(missing_labels)}. "
+              "They will be omitted from the epoch and feature files.")
 
     # reject_by_annotation=False: MNE auto-inserts "BAD boundary" annotations
     # at concatenation seams (Natus: joining 3 run files) -- with the
