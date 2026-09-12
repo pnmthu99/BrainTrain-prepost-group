@@ -10,6 +10,11 @@ in the wide input and are excluded only from that feature's model; the other
 observations from the same subject remain available. The script requires
 numpy, pandas, scipy, matplotlib, and statsmodels.
 
+Inference strategy: the three time contrasts are planned comparisons. Their
+p-values are FDR-adjusted across every feature x contrast in each task x
+feature family; omnibus Time tests are reported separately and do not gate
+the planned contrasts.
+
 Outputs are written to results_lmm/ in the current working directory.
 
 Usage:
@@ -17,6 +22,7 @@ Usage:
 """
 
 import sys
+import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -112,12 +118,27 @@ def fit_feature_lmm(long):
         "Post": (long["timepoint"] == "post").astype(float).to_numpy(),
         "Month3": (long["timepoint"] == "3m").astype(float).to_numpy(),
     }, index=long.index)
-    try:
-        fitted = sm.MixedLM(long["value"], exog, groups=long["subject_id"]).fit(reml=True, method="lbfgs")
-    except Exception as error:
-        return None, f"fit failed: {type(error).__name__}: {error}"
-    if not fitted.converged:
-        return None, "model did not converge"
+    errors = []
+    fitted = None
+    fit_method = None
+    fit_warnings = []
+    for method in ("lbfgs", "powell"):
+        try:
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                candidate = sm.MixedLM(long["value"], exog, groups=long["subject_id"]).fit(
+                    reml=True, method=method
+                )
+            if candidate.converged:
+                fitted = candidate
+                fit_method = method
+                fit_warnings = [str(warning.message) for warning in captured]
+                break
+            errors.append(f"{method}: did not converge")
+        except Exception as error:
+            errors.append(f"{method}: {type(error).__name__}: {error}")
+    if fitted is None:
+        return None, "fit failed: " + " | ".join(errors)
 
     beta = fitted.fe_params.loc[["Intercept", "Post", "Month3"]].to_numpy(dtype=float)
     covariance = fitted.cov_params().loc[["Intercept", "Post", "Month3"],
@@ -131,6 +152,8 @@ def fit_feature_lmm(long):
         "log_likelihood": float(fitted.llf),
         "aic": float(fitted.aic),
         "bic": float(fitted.bic),
+        "fit_method": fit_method,
+        "fit_warning": " | ".join(fit_warnings),
     }, None
 
 
@@ -177,6 +200,8 @@ def analyze_feature(df, subject_ids, columns):
         "Random_Intercept_Variance": fitted["random_intercept_variance"],
         "AIC": fitted["aic"],
         "BIC": fitted["bic"],
+        "Fit_Method": fitted["fit_method"],
+        "Fit_Warning": fitted["fit_warning"],
     }
 
     contrast_vectors = {
@@ -256,8 +281,11 @@ def make_lmm_heatmap(task_df, task, family_name, measures, contrast_name, out_pa
     q_values = subset.pivot(index="ROI", columns="Measure", values="p_adj_FDR").reindex(index=ROIS, columns=measures)
     values = effects.to_numpy(dtype=float)
     maximum = np.nanmax(np.abs(values)) if not np.all(np.isnan(values)) else 1.0
+    display_values = np.ma.masked_invalid(values)
     fig, ax = plt.subplots(figsize=(max(5.5, 1.8 * len(measures)), 5))
-    image = ax.imshow(values, cmap="RdBu_r", vmin=-maximum, vmax=maximum, aspect="auto")
+    color_map = plt.get_cmap("RdBu_r").copy()
+    color_map.set_bad("lightgray")
+    image = ax.imshow(display_values, cmap=color_map, vmin=-maximum, vmax=maximum, aspect="auto")
     ax.set_xticks(range(len(measures)))
     ax.set_xticklabels(measures, rotation=45, ha="right")
     ax.set_yticks(range(len(ROIS)))
@@ -265,10 +293,15 @@ def make_lmm_heatmap(task_df, task, family_name, measures, contrast_name, out_pa
     for row in range(len(ROIS)):
         for column in range(len(measures)):
             q_value = q_values.to_numpy()[row, column]
-            if pd.notna(q_value) and q_value < ALPHA:
-                ax.text(column, row, f"{sig_stars(q_value)}\nq={q_value:.3f}",
+            if np.isnan(values[row, column]):
+                ax.text(column, row, "NA", ha="center", va="center", color="black", fontsize=8)
+            elif pd.notna(q_value) and q_value < ALPHA:
+                ax.text(column, row, f"{sig_stars(q_value)}\np_FDR={q_value:.3f}",
                         ha="center", va="center", color="white", fontweight="bold", fontsize=9)
-    ax.set_title(f"Task {task} - {family_name} - {contrast_name}\nColor = LMM estimate / residual SD")
+    ax.set_title(
+        f"Task {task} - {family_name} - {contrast_name}\n"
+        "Color = LMM estimate / residual SD; NA = model unavailable"
+    )
     fig.colorbar(image, ax=ax, label="Standardized model estimate", shrink=0.8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -282,10 +315,13 @@ def make_lmm_dotplot(task_df, task, family_name, contrast_name, out_path):
         return False
     subset = subset.set_index("ROI").reindex(ROIS)
     fig, ax = plt.subplots(figsize=(6, 4))
+    labels = []
     for position, roi in enumerate(ROIS):
         row = subset.loc[roi]
         if pd.isna(row["Estimate"]):
+            labels.append(f"{roi} (NA)")
             continue
+        labels.append(roi)
         significant = row["p_adj_FDR"] < ALPHA
         color = "#C1272D" if row["Estimate"] > 0 else "#1F77B4"
         ax.errorbar(row["Estimate"], position,
@@ -293,11 +329,11 @@ def make_lmm_dotplot(task_df, task, family_name, contrast_name, out_path):
                     fmt="o", color=color, ecolor=color, capsize=4, markersize=8,
                     markerfacecolor=color if significant else "white", markeredgecolor=color)
         if significant:
-            ax.text(row["CI_95_High"], position, f"  {sig_stars(row['p_adj_FDR'])} q={row['p_adj_FDR']:.3f}",
+            ax.text(row["CI_95_High"], position, f"  {sig_stars(row['p_adj_FDR'])} p_FDR={row['p_adj_FDR']:.3f}",
                     va="center", fontsize=9)
     ax.axvline(0, color="gray", linestyle="--", linewidth=1)
     ax.set_yticks(range(len(ROIS)))
-    ax.set_yticklabels(ROIS)
+    ax.set_yticklabels(labels)
     ax.set_xlabel("LMM estimated difference with 95% CI")
     ax.set_title(f"Task {task} - {family_name} - {contrast_name}")
     fig.tight_layout()
@@ -310,6 +346,7 @@ def make_lmm_trajectory(metadata, long, model_means, omnibus_q, out_path):
     fig, ax = plt.subplots(figsize=(5.5, 4))
     x_positions = np.arange(len(TIMEPOINTS))
     pivot = long.pivot(index="subject_id", columns="timepoint", values="value").reindex(columns=TIMEPOINTS)
+    counts = long.groupby("timepoint", observed=False)["value"].count()
     ax.plot(x_positions, pivot.to_numpy(dtype=float).T, color="lightgray", linewidth=0.8, alpha=0.7)
     estimates = np.array([model_means[timepoint][0] for timepoint in TIMEPOINTS])
     lows = np.array([model_means[timepoint][2] for timepoint in TIMEPOINTS])
@@ -317,12 +354,70 @@ def make_lmm_trajectory(metadata, long, model_means, omnibus_q, out_path):
     ax.errorbar(x_positions, estimates, yerr=[estimates - lows, highs - estimates],
                 fmt="o-", color="black", capsize=5, linewidth=2, label="LMM estimated mean, 95% CI")
     ax.set_xticks(x_positions)
-    ax.set_xticklabels(["Pre", "Post", "3m"])
+    ax.set_xticklabels(["0m", "1m", "3m"])
     ax.set_ylabel(metadata["Measure"])
-    ax.set_title(f"Task {metadata['Task']} - {metadata['ROI']} - {metadata['Measure']}\nLMM omnibus q={omnibus_q:.3f}")
+    ax.set_title(
+        f"Task {metadata['Task']} - {metadata['ROI']} - {metadata['Measure']}\n"
+        f"N (0m/1m/3m) = {counts['pre']}/{counts['post']}/{counts['3m']}; "
+        f"Time effect: p_FDR={omnibus_q:.3f}"
+    )
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def make_lmm_integrated_trajectory(metadata, long, model_means, omnibus_q, contrasts, out_path):
+    """Plot the time trajectory with omnibus and significant planned contrasts."""
+    fig, ax = plt.subplots(figsize=(6, 4.8))
+    x_positions = np.arange(len(TIMEPOINTS))
+    pivot = long.pivot(index="subject_id", columns="timepoint", values="value").reindex(columns=TIMEPOINTS)
+    counts = long.groupby("timepoint", observed=False)["value"].count()
+    ax.plot(x_positions, pivot.to_numpy(dtype=float).T, color="lightgray", linewidth=0.8, alpha=0.7)
+
+    estimates = np.array([model_means[timepoint][0] for timepoint in TIMEPOINTS])
+    lows = np.array([model_means[timepoint][2] for timepoint in TIMEPOINTS])
+    highs = np.array([model_means[timepoint][3] for timepoint in TIMEPOINTS])
+    ax.errorbar(x_positions, estimates, yerr=[estimates - lows, highs - estimates],
+                fmt="o-", color="black", capsize=5, linewidth=2, label="LMM estimated mean, 95% CI")
+
+    contrast_positions = {
+        "post_minus_pre": (0, 1),
+        "3m_minus_pre": (0, 2),
+        "3m_minus_post": (1, 2),
+    }
+    significant = contrasts[contrasts["p_adj_FDR"] < ALPHA]
+    y_min = np.nanmin(np.r_[pivot.to_numpy(dtype=float).ravel(), lows])
+    y_max = np.nanmax(np.r_[pivot.to_numpy(dtype=float).ravel(), highs])
+    y_span = max(y_max - y_min, 1e-6)
+    if significant.empty:
+        ax.text(0.02, 0.02, "Planned contrasts: all p_FDR >= 0.05", transform=ax.transAxes,
+                ha="left", va="bottom", fontsize=8)
+    else:
+        for level, (_, row) in enumerate(significant.iterrows()):
+            left, right = contrast_positions[row["Contrast"]]
+            bracket_y = y_max + y_span * (0.12 + 0.12 * level)
+            cap_height = y_span * 0.025
+            ax.plot([left, left, right, right],
+                    [bracket_y - cap_height, bracket_y, bracket_y, bracket_y - cap_height],
+                    color="black", linewidth=1)
+            ax.text((left + right) / 2, bracket_y + y_span * 0.015,
+                    sig_stars(row["p_adj_FDR"]),
+                    ha="center", va="bottom", fontsize=8)
+        ax.set_ylim(top=y_max + y_span * (0.18 + 0.12 * len(significant)))
+
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(["0m", "1m", "3m"])
+    ax.set_ylabel(metadata["Measure"])
+    ax.set_title(
+        f"Task {metadata['Task']} - {metadata['ROI']} - {metadata['Measure']}\n"
+        f"N (0m/1m/3m) = {counts['pre']}/{counts['post']}/{counts['3m']}"
+    )
+    ax.text(0.02, 0.98, f"Time effect: p_FDR={omnibus_q:.3f}",
+            transform=ax.transAxes, ha="left", va="top", fontsize=8)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
 
@@ -345,6 +440,8 @@ def main(csv_path):
 
     omnibus_summary = pd.concat(omnibus_by_task.values(), ignore_index=True)
     contrasts_summary = pd.concat(contrasts_by_task.values(), ignore_index=True)
+    omnibus_summary["Analysis_Strategy"] = "planned_contrasts"
+    contrasts_summary["Analysis_Strategy"] = "planned_contrasts"
     rounded_for_export(omnibus_summary).to_csv(output_dir / "eeg_lmm_omnibus_summary.csv", index=False)
     rounded_for_export(contrasts_summary).to_csv(output_dir / "eeg_lmm_contrasts_summary.csv", index=False)
     failures.to_csv(output_dir / "eeg_lmm_failures.csv", index=False)
@@ -360,18 +457,10 @@ def main(csv_path):
                 else:
                     make_lmm_dotplot(task_contrasts, task, family_name, contrast_name, plot_path)
 
-    significant_keys = set(
-        tuple(row) for row in omnibus_summary.loc[omnibus_summary["Significant_after_FDR"],
-                                                 ["Task", "ROI", "Measure"]].to_numpy()
-    )
+    omnibus_q_by_feature = omnibus_summary.set_index(["Task", "ROI", "Measure"])["p_adj_FDR"]
     for metadata, long, model_means in trajectories:
         key = (metadata["Task"], metadata["ROI"], metadata["Measure"])
-        if key not in significant_keys:
-            continue
-        omnibus_q = omnibus_summary.loc[
-            (omnibus_summary["Task"] == key[0]) & (omnibus_summary["ROI"] == key[1])
-            & (omnibus_summary["Measure"] == key[2]), "p_adj_FDR"
-        ].iloc[0]
+        omnibus_q = omnibus_q_by_feature.loc[key]
         make_lmm_trajectory(metadata, long, model_means, omnibus_q,
                             output_dir / f"eeg_lmm_trajectory_task_{key[0]}_{key[1]}_{key[2]}.png")
 
