@@ -51,7 +51,7 @@ Estimation plots (Gardner-Altman / Cumming style) added 2026-07:
 
 Usage
 -----
-    python prepost_cognitive_analysis.py your_data.csv
+    python prepost_cognitive_01m.py your_data.csv
 """
 
 import sys
@@ -724,6 +724,6 @@ def main(csv_path):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python prepost_cognitive_analysis.py your_data.csv")
+        print("Usage: python prepost_cognitive_01m.py your_data.csv")
         sys.exit(1)
     main(sys.argv[1])
