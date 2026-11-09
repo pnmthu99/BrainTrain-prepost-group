@@ -277,7 +277,10 @@ def make_lmm_heatmap(task_df, task, family_name, measures, contrast_name, out_pa
     subset = task_df[(task_df["Family"] == family_name) & (task_df["Contrast"] == contrast_name)]
     if subset.empty:
         return False
-    effects = subset.pivot(index="ROI", columns="Measure", values="Effect_Size").reindex(index=ROIS, columns=measures)
+    # Use the native model-estimated contrast for the heatmap. Standardized
+    # effects remain available in the exported contrast tables, but the main
+    # figure should use the same estimand reported in the Results text.
+    effects = subset.pivot(index="ROI", columns="Measure", values="Estimate").reindex(index=ROIS, columns=measures)
     q_values = subset.pivot(index="ROI", columns="Measure", values="p_adj_FDR").reindex(index=ROIS, columns=measures)
     values = effects.to_numpy(dtype=float)
     maximum = np.nanmax(np.abs(values)) if not np.all(np.isnan(values)) else 1.0
@@ -298,11 +301,20 @@ def make_lmm_heatmap(task_df, task, family_name, measures, contrast_name, out_pa
             elif pd.notna(q_value) and q_value < ALPHA:
                 ax.text(column, row, f"{sig_stars(q_value)}\np_FDR={q_value:.3f}",
                         ha="center", va="center", color="white", fontweight="bold", fontsize=9)
+    contrast_labels = {
+    "post_minus_pre": "1m_minus_0m",
+    "3m_minus_pre": "3m_minus_0m",
+    "3m_minus_post": "3m_minus_1m",
+}
+
+    contrast_label = contrast_labels.get(contrast_name, contrast_name)
+
     ax.set_title(
-        f"Task {task} - {family_name} - {contrast_name}\n"
-        "Color = LMM estimate / residual SD; NA = model unavailable"
+        f"Task {task} - {family_name} - {contrast_label}\n"
+        "Color = model-estimated difference; NA = model unavailable"
     )
-    fig.colorbar(image, ax=ax, label="Standardized model estimate", shrink=0.8)
+
+    fig.colorbar(image, ax=ax, label="Model-estimated difference", shrink=0.8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
